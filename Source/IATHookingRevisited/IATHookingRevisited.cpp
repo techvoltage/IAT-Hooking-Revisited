@@ -13,7 +13,8 @@ DWORD FindRemotePEB(HANDLE hProcess)
 
 	if (!hNTDLL)
 		return 0;
-
+	
+	// Get Address of NtQueryInformationProcess
 	FARPROC fpNtQueryInformationProcess = GetProcAddress
 	(
 		hNTDLL,
@@ -31,6 +32,7 @@ DWORD FindRemotePEB(HANDLE hProcess)
 
 	DWORD dwReturnLength = 0;
 
+	// Get the pBasicInfo(PROCESS_BASIC_INFORMATION) struct filled
 	ntQueryInformationProcess
 	(
 		hProcess, 
@@ -43,8 +45,10 @@ DWORD FindRemotePEB(HANDLE hProcess)
 	return pBasicInfo->PebBaseAddress;
 }
 
+
 PEB* ReadRemotePEB(HANDLE hProcess)
 {
+	// Could have passed this from main as well
 	DWORD dwPEBAddress = FindRemotePEB(hProcess);
 
 	PEB* pPEB = new PEB();
@@ -330,7 +334,8 @@ BOOL PatchDWORD(BYTE* pBuffer, DWORD dwBufferSize, DWORD dwOldValue,
 
 BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName, 
 				  PVOID pHandler, DWORD dwHandlerSize)
-{
+{	
+	// Get handle to calc.exe
 	HANDLE hProcess = OpenProcess
 	(
 		PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_OPERATION | 
@@ -344,7 +349,8 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 		printf("Error opening process\r\n");
 		return FALSE;
 	}
-
+	
+	// Find Process Env. block of calc.exe using its handle (redundant call)
 	DWORD dwPEBAddress = FindRemotePEB(hProcess);
 
 	if (!dwPEBAddress)
@@ -352,7 +358,8 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 		printf("Error finding remote PEB\r\n");
 		return FALSE;
 	}
-
+	
+	// Find Process Env. block of calc.exe using its handle
 	PEB* pPEB = ReadRemotePEB(hProcess);
 
 	if (!pPEB)
@@ -360,7 +367,9 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 		printf("Error reading remote PEB\r\n");
 		return FALSE;
 	}
-
+	
+	// PEB contains the BaseAddress of the image, since there is no API for it,
+	// we find the BaseAddress of the process using PEB
 	PLOADED_IMAGE pImage = ReadRemoteImage(hProcess, pPEB->ImageBaseAddress);
 
 	if (!pImage)
@@ -368,7 +377,8 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 		printf("Error reading remote image\r\n");
 		return FALSE;
 	}
-
+	
+	// Read the IID (Image Import Descriptors) from OptionalHeader.DataDirectory
 	PIMAGE_IMPORT_DESCRIPTOR pImportDescriptors = ReadRemoteImportDescriptors
 	(
 		hProcess, 
@@ -570,13 +580,15 @@ int GetCalcId()
 	HANDLE hProcess;
 	PROCESSENTRY32 pe32;
 	DWORD dwPriorityClass;
-
+	
+	// Get list of processes running on windows
 	hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (hProcessSnap == INVALID_HANDLE_VALUE)
 		return 0;
 
 	pe32.dwSize = sizeof(PROCESSENTRY32);
-
+	
+	// Return if we exhaust all the process
 	if (!Process32First(hProcessSnap, &pe32))
 	{
 		CloseHandle(hProcessSnap);
@@ -584,7 +596,7 @@ int GetCalcId()
 	}
 
 	do
-	{
+	{	// Find calc.exe from the list of process and return with its pid
 		if (!_wcsicmp(pe32.szExeFile, L"calc.exe"))
 		{
 			CloseHandle(hProcessSnap);
@@ -600,7 +612,8 @@ int GetCalcId()
 
 
 int _tmain(int argc, _TCHAR* argv[])
-{
+{	// This structure contians the binary form of the MessageBox shellcode
+	// This shellcode uses EAT parsing to locate MessageBoxA
 	char* handler =
 		"\x55\x31\xdb\xeb\x55\x64\x8b\x7b"
 		"\x30\x8b\x7f\x0c\x8b\x7f\x1c\x8b"
@@ -628,6 +641,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
 	DWORD dwProcessId = GetCalcId();
 
+	// Call HookFunction with the first pid of calc.exe
 	HookFunction
 	(
 		dwProcessId, 
