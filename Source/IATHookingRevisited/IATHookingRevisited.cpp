@@ -1,4 +1,5 @@
 // IATHookingRevisited.cpp : Defines the entry point for the console application.
+// This logic can be used in unpacking as well
 #include "stdafx.h"
 #include <windows.h>
 #include <DbgHelp.h>
@@ -68,6 +69,7 @@ PEB* ReadRemotePEB(HANDLE hProcess)
 	return pPEB;
 }
 
+// Get section headers from remote process
 PLOADED_IMAGE ReadRemoteImage(HANDLE hProcess, LPCVOID lpImageBaseAddress)
 {
 	BYTE* lpBuffer = new BYTE[BUFFER_SIZE];
@@ -101,7 +103,7 @@ PLOADED_IMAGE ReadRemoteImage(HANDLE hProcess, LPCVOID lpImageBaseAddress)
 	return pImage;
 }
 
-
+// We need to find the address of .text section in order to inject our Shellcode there
 PIMAGE_SECTION_HEADER FindSectionHeaderByName(PIMAGE_SECTION_HEADER pHeaders, 
 											  DWORD dwNumberOfSections, char* pName)
 {
@@ -121,7 +123,7 @@ PIMAGE_SECTION_HEADER FindSectionHeaderByName(PIMAGE_SECTION_HEADER pHeaders,
 	return pHeaderMatch;
 }
 
-
+// See also: Documentation for ImageDirectoryEntryToData on MSDN
 PIMAGE_IMPORT_DESCRIPTOR ReadRemoteImportDescriptors(HANDLE hProcess, 
 													 LPCVOID lpImageBaseAddress,
 													 PIMAGE_DATA_DIRECTORY pImageDataDirectory)
@@ -130,7 +132,7 @@ PIMAGE_IMPORT_DESCRIPTOR ReadRemoteImportDescriptors(HANDLE hProcess,
 
 	PIMAGE_IMPORT_DESCRIPTOR pImportDescriptors = 
 		new IMAGE_IMPORT_DESCRIPTOR[importDirectory.Size / sizeof(IMAGE_IMPORT_DESCRIPTOR)];
-
+	// Read the virtual address of IID in pImportDescriptors
 	BOOL bSuccess = ReadProcessMemory
 	(
 		hProcess,
@@ -166,6 +168,8 @@ char* ReadRemoteDescriptorName(HANDLE hProcess, LPCVOID lpImageBaseAddress,
 	return pBuffer;
 }
 
+// Read the import name table by reading in OriginalFirstThunk 
+// OriginalFirstThunk points to an array of function names (INT)
 PIMAGE_THUNK_DATA32 ReadRemoteILT(HANDLE hProcess, LPCVOID lpImageBaseAddress, 
 								  PIMAGE_IMPORT_DESCRIPTOR pImageImportDescriptor)
 {
@@ -189,7 +193,7 @@ PIMAGE_THUNK_DATA32 ReadRemoteILT(HANDLE hProcess, LPCVOID lpImageBaseAddress,
 	return pILT;
 }
 
-
+// FirstThunk of ImageImportDescriptor(IID) points to an array of address called the IAT
 PIMAGE_THUNK_DATA32 ReadRemoteIAT(HANDLE hProcess, LPCVOID lpImageBaseAddress, 
 								  PIMAGE_IMPORT_DESCRIPTOR pImageImportDescriptor)
 {
@@ -255,6 +259,7 @@ PPEB_LDR_DATA ReadRemoteLoaderData(HANDLE hProcess, PPEB pPEB)
 	return pLoaderData;
 }
 
+//InLoadOrderModuleList contains the active DLLs loaded in process's memory
 PVOID FindRemoteImageBase(HANDLE hProcess, PPEB pPEB, char* pModuleName)
 {
 	PPEB_LDR_DATA pLoaderData = ReadRemoteLoaderData(hProcess, pPEB);
@@ -316,6 +321,7 @@ PVOID FindRemoteImageBase(HANDLE hProcess, PPEB pPEB, char* pModuleName)
 	return 0;
 }
 
+// Patch Address in IAT by call to our own MessageBox Shellcode
 BOOL PatchDWORD(BYTE* pBuffer, DWORD dwBufferSize, DWORD dwOldValue, 
 				DWORD dwNewValue)
 {
@@ -391,7 +397,8 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 		printf("Error reading remote import descriptors\r\n");
 		return FALSE;
 	}
-
+	
+	// Read till 0x2000 IIDs
 	for (DWORD i = 0; i < 0x2000; i++)
 	{
 		IMAGE_IMPORT_DESCRIPTOR descriptor = pImportDescriptors[i];
@@ -429,7 +436,8 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 			}
 
 			DWORD dwOffset = 0;
-
+			
+			// Walk INT searching for function name. Retrieve its address from IAT
 			for (dwOffset = 0; dwOffset < dwThunkArrayLen; dwOffset++)
 			{
 				PIMAGE_IMPORT_BY_NAME pImportByName = ReadRemoteImportByName
@@ -492,6 +500,7 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 				return FALSE;
 			}
 
+			// Get Address of .text section in the remote process
 			PIMAGE_SECTION_HEADER pImportTextHeader = FindSectionHeaderByName
 			(
 				pImportImage->Sections, 
@@ -508,7 +517,8 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 			BYTE* pHandlerBuffer = new BYTE[dwHandlerSize];
 
 			memcpy(pHandlerBuffer, pHandler, dwHandlerSize);
-
+			
+			// Inject Shellcode at the found IAT, essentially completing our hooking procedure
 			BOOL bSuccess = PatchDWORD
 			(
 				pHandlerBuffer, 
@@ -523,12 +533,13 @@ BOOL HookFunction(DWORD dwProcessId, CHAR* pModuleName, CHAR* pFunctionName,
 				return FALSE;
 			}
 
+			// Get the code cave(empty area in .text section)
 			DWORD dwHandlerAddress = (DWORD)pImportImageBase + 
 				pImportTextHeader->VirtualAddress + 
 				pImportTextHeader->SizeOfRawData - 
 				dwHandlerSize;
 
-			// Write handler to text section
+			// Write handler code to the end of text section
 			bSuccess = WriteProcessMemory
 			(
 				hProcess,
